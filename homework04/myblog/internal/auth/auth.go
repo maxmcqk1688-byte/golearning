@@ -1,0 +1,78 @@
+// Package auth 封装密码哈希与 JWT 签发/校验能力。
+package auth
+
+import (
+	"errors"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
+)
+
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrMissingToken       = errors.New("missing token")
+	ErrInvalidToken       = errors.New("invalid token")
+	ErrNotAuthor          = errors.New("not the author")
+)
+
+// Claims 是博客接口使用的 JWT 载荷。
+type Claims struct {
+	UserID   uint   `json:"id"`
+	Username string `json:"username"`
+	jwt.RegisteredClaims
+}
+
+// Manager 持有 JWT 密钥与有效期，负责令牌签发与解析。
+type Manager struct {
+	secret []byte
+	expire time.Duration
+	issuer string
+}
+
+// NewManager 创建 JWT 管理器。
+func NewManager(secret string, expire time.Duration) *Manager {
+	return &Manager{secret: []byte(secret), expire: expire, issuer: "blog-server"}
+}
+
+// HashPassword 使用 bcrypt 对明文密码加密。
+func HashPassword(plain string) (string, error) {
+	b, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
+	return string(b), err
+}
+
+// VerifyPassword 校验明文密码与哈希是否匹配。
+func VerifyPassword(hash, plain string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)) == nil
+}
+
+// GenerateToken 为用户签发 JWT。
+func (m *Manager) GenerateToken(userID uint, username string) (string, error) {
+	now := time.Now()
+	claims := Claims{
+		UserID:   userID,
+		Username: username,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    m.issuer,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(m.expire)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(m.secret)
+}
+
+// ParseToken 校验签名与有效期并返回载荷。
+func (m *Manager) ParseToken(tokenString string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (any, error) {
+		return m.secret, nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, ErrInvalidToken
+	}
+	return claims, nil
+}

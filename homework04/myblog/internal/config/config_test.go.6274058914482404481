@@ -1,0 +1,87 @@
+package config
+
+import (
+	"testing"
+	"time"
+)
+
+// clearEnv 将全部可配置环境变量置空，保证用例互不影响。
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"SERVER_PORT", "DB_DRIVER", "DB_DSN", "JWT_SECRET", "JWT_EXPIRE", "LOG_LEVEL", "GIN_MODE",
+	} {
+		t.Setenv(k, "")
+	}
+}
+
+func TestLoadDefaults(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load 返回错误: %v", err)
+	}
+	if cfg.ServerPort != ":8080" {
+		t.Errorf("ServerPort 默认 :8080, 实际 %s", cfg.ServerPort)
+	}
+	if cfg.DBDriver != "sqlite" || cfg.DBDSN != "blog.db" {
+		t.Errorf("数据库默认 sqlite/blog.db, 实际 %s/%s", cfg.DBDriver, cfg.DBDSN)
+	}
+	if cfg.JWTExpire != 24*time.Hour {
+		t.Errorf("JWTExpire 默认 24h, 实际 %v", cfg.JWTExpire)
+	}
+	if cfg.LogLevel != "info" || cfg.GinMode != "debug" {
+		t.Errorf("日志/Gin 模式默认值异常: %s/%s", cfg.LogLevel, cfg.GinMode)
+	}
+}
+
+func TestLoadMissingSecret(t *testing.T) {
+	clearEnv(t)
+	if _, err := Load(); err == nil {
+		t.Fatal("JWT_SECRET 未设置时 Load 应返回错误")
+	}
+}
+
+func TestLoadOverrides(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("JWT_SECRET", "s")
+	t.Setenv("SERVER_PORT", ":9090")
+	t.Setenv("DB_DRIVER", "mysql")
+	t.Setenv("DB_DSN", "user:pass@tcp(127.0.0.1:3306)/blog")
+	t.Setenv("LOG_LEVEL", "debug")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load 返回错误: %v", err)
+	}
+	if cfg.ServerPort != ":9090" || cfg.DBDriver != "mysql" {
+		t.Errorf("覆盖值未生效: %+v", cfg)
+	}
+}
+
+func TestLoadJWTExpireFormats(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"30m", 30 * time.Minute},
+		{"168h", 168 * time.Hour},
+		{"48", 48 * time.Hour},  // 纯数字按小时解析
+		{"bad!!", 24 * time.Hour}, // 非法值回退默认
+	}
+	for _, tc := range cases {
+		clearEnv(t)
+		t.Setenv("JWT_SECRET", "s")
+		t.Setenv("JWT_EXPIRE", tc.raw)
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("raw=%q: Load 返回错误: %v", tc.raw, err)
+		}
+		if cfg.JWTExpire != tc.want {
+			t.Errorf("raw=%q: 期望 %v, 实际 %v", tc.raw, tc.want, cfg.JWTExpire)
+		}
+	}
+}
